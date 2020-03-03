@@ -2,6 +2,7 @@ package publishingstrategy
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	configv1 "github.com/openshift/api/config/v1"
@@ -120,6 +121,9 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 	if err != nil {
 		return reconcile.Result{}, err
 	}
+	reqLogger.Info(region)
+	reqLogger.Info("0")
+
 	// Secret should exist in the same namespace Account CR's are created
 	awsClient, err := awsclient.GetAWSClient(r.client, awsclient.NewAwsClientInput{
 		SecretName: config.AWSSecretName,
@@ -127,6 +131,7 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		AwsRegion:  region,
 	})
 	if err != nil {
+		fmt.Println(err.Error())
 		reqLogger.Error(err, "Failed to get AWS client")
 		return reconcile.Result{}, err
 	}
@@ -134,6 +139,9 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 	// if CR is wanted the default API server to be internal-facing only, we
 	// delete the external NLB for port 6443/TCP and change api.<cluster-domain> DNS record to point to internal NLB
 	if instance.Spec.DefaultAPIServerIngress.Listening == cloudingressv1alpha1.Internal {
+
+		reqLogger.Info("1")
+
 		// loadbalancerInfo returns list of all non-classic ELBs
 		loadBalancerInfo, err := awsClient.ListAllNLBs()
 		if err != nil {
@@ -144,11 +152,15 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		var intHostedZoneID string
 		// delete the external NLB
 		for _, loadBalancer := range loadBalancerInfo {
+			reqLogger.Info("2")
+
 			if loadBalancer.Scheme == "internet-facing" {
 				err := awsClient.DeleteExternalLoadBalancer(loadBalancer.LoadBalancerArn)
 				if err != nil {
 					log.Error(err, "error deleting external LB")
 				}
+				reqLogger.Info("3")
+
 			}
 			// get internal dnsName and HostID for UpsertCNAME func
 			// when we refactor multi-cloud we can figure out what aws lb arn looks like
@@ -156,8 +168,12 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 			if loadBalancer.Scheme == "internal" {
 				intDNSName = loadBalancer.DNSName
 				intHostedZoneID = loadBalancer.CanonicalHostedZoneNameID
+				reqLogger.Info("4")
+
 			}
 		}
+
+		reqLogger.Info("5")
 
 		// change Alias of resource record set of external LB in public hosted zone to internal LB
 		domainName := configv1.DNSSpec{}.BaseDomain // in form of ```samn-test.j5u3.s1.devshift.org```
@@ -166,17 +182,23 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		// which happens to be the domainName minus the name of the cluster
 		// Since there are NO object on cluster with just clusterName,
 		// we will index the first period and parse right
-		pubDomainName := domainName[strings.Index(domainName, ".")+1 : len(domainName)] // pubDomainName in form of ```j5u3.s1.devshift.org```
+		pubDomainName := domainName[strings.Index(domainName, ".")+1:] // pubDomainName in form of ```j5u3.s1.devshift.org```
 		apiDNSName := "api." + domainName + "."
 		comment := "Update api.<clusterName> alias to internal NLB"
+
+		reqLogger.Info("6")
 
 		// upsert resource record to change api.<clusterName> from external NLB to internal NLB
 		err = awsClient.UpsertCNAME(pubDomainName, intDNSName, intHostedZoneID, apiDNSName, comment, false)
 		if err != nil {
 			log.Error(err, "Error updating api.<clusterName> alias to internal NLB")
 		}
+		reqLogger.Info("7")
+
 		return reconcile.Result{}, nil
 	}
+
+	reqLogger.Info("8")
 
 	return reconcile.Result{}, nil
 }

@@ -3,5 +3,17 @@ kind: PublishingStrategy
 metadata:
   name: example-publishingstrategy
 spec:
-  # Add fields here
-  dnsName: app
+  defaultAPIServerIngress:
+    listening: internal
+  applicationIngress:
+    - listening: external
+      default: true
+      dnsName: "*.apps"
+      certificate:
+        secretRef:
+          name: foo
+          namespace: bar
+      routeSelector:
+        labelSelector:
+          matchLabels:
+            foo: bar
