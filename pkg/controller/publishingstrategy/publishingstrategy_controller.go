@@ -116,6 +116,25 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
+	log.Info(fmt.Sprintf("beginning ingressControllerList: %v", ingressControllerList))
+
+	// get a list of all ingress on cluster that has annotation owner cloud-ingress-operator
+	// and delete all non-default ingresses
+	for _, ingressController := range ingressControllerList.Items {
+		if ingressController.Name != "default" && ingressController.ObjectMeta.Annotations["Owner"] == "cloud-ingress-operator" {
+			log.Info(fmt.Sprintf("ingresscontroller to be deleted: %v", ingressController))
+			err := r.client.Delete(context.TODO(), &ingressController)
+			if err != nil {
+				log.Error(err, "failed to delete ingresscontroller")
+				return reconcile.Result{}, err
+			}
+		}
+	}
+
+	// wait 45 seconds for deletion to be completed
+	time.Sleep(time.Duration(45) * time.Second)
+	log.Info("wait 45 seconds after deletion")
+
 	// create list of applicationIngress
 	var ingressNotOnCluster []cloudingressv1alpha1.ApplicationIngress
 
@@ -128,8 +147,9 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		}
 	}
 
-	for _, appingress := range ingressNotOnCluster {
+	log.Info(fmt.Sprintf("ingressNotOnClusterList: %v", ingressNotOnCluster))
 
+	for _, appingress := range ingressNotOnCluster {
 		newCertificate := &corev1.LocalObjectReference{
 			Name: appingress.Certificate.Name,
 		}
@@ -454,6 +474,9 @@ func newApplicationIngressControllerCR(ingressControllerCRName, scope, dnsName s
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ingressControllerCRName,
 			Namespace: ingressControllerNamespace,
+			Annotations: map[string]string{
+				"Owner": "cloud-ingress-operator",
+			},
 		},
 		Spec: operatorv1.IngressControllerSpec{
 			DefaultCertificate: certificate,
