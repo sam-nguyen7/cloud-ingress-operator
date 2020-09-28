@@ -30,6 +30,7 @@ import (
 	// OSD metrics
 	"github.com/openshift/cloud-ingress-operator/pkg/localmetrics"
 	osdmetrics "github.com/openshift/operator-custom-metrics/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Change below variables to serve metrics on different host or port.
@@ -133,12 +134,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	metricsServer := osdmetrics.NewBuilder().
+	registry := prometheus.NewRegistry()
+	metricsServer := osdmetrics.NewBuilder("openshift-cloud-ingress-operator", "localmetrics-cloud-ingress-operator").
 		WithPort(osdMetricsPort).
 		WithPath(osdMetricsPath).
 		WithCollectors(localmetrics.MetricsList).
-		WithServiceName("localmetrics-cloud-ingress-operator").
 		WithServiceMonitor().
+		WithRegistry(registry).
 		GetConfig()
 
 	if err := osdmetrics.ConfigureMetrics(context.TODO(), *metricsServer); err != nil {
