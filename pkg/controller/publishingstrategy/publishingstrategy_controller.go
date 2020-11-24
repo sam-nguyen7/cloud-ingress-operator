@@ -109,6 +109,36 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
+	// Get all IngressControllers on cluster with an annotation that indicates cloud-ingress-operator owns it
+	ingressControllerList := &operatorv1.IngressControllerList{}
+	listOptions := []client.ListOption{
+		client.InNamespace("openshift-ingress-operator"),
+	}
+	err = r.client.List(context.TODO(), ingressControllerList, listOptions...)
+	if err != nil {
+		log.Error(err, "Cannot get list of ingresscontroller")
+		return reconcile.Result{}, err
+	}
+
+	ownedIngressControllers := getIngressWithOwnerAnnotation(*ingressControllerList)
+
+	/* To ensure that the set of all IngressControllers owned by cloud-ingress-operator
+	match the list of ApplicationIngresses in the PublishingStrategy, a map is created to
+	tie IngressControllers existing on cluster with the owner annotation
+	to the ApplicationIngresses existing in the PublishingStrategy CR. If an IngressController CR
+	owned by cloud-ingress-operator exists on cluster but an associated ApplicationIngress does not exist in
+	the PublishingStrategy CR (likely removed from the list of ApplicationIngress),
+	that IngressController CR should be deleted.
+	As each ApplicationIngress is processed, and the corresponding IngressController CR is confirmed to exist,
+	that entry in the map will be turned `true`. When all ApplicationIngresses have been processed, any remaining
+	IngressController CRs in the map with the value `false` will be deleted.
+	*/
+	var ownedIngressExistingMap map[string]bool
+	for _, ownedIngress := range ownedIngressControllers.Items {
+		// Initalize them all to false as they have not been verified against ApplicationIngress list
+		ownedIngressExistingMap[ownedIngress.Name] = false
+	}
+
 	// Loop through ingress controllers defined in PublishingStrategy spec
 	/* Each ApplicationIngress defines a desired spec for an IngressController
 	// The following loop goes through each ApplicationIngress defined in the
@@ -165,6 +195,9 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 			}
 			return reconcile.Result{}, err
 		}
+
+		// Mark the IngressControllers as existing
+		ownedIngressExistingMap[ingressController.Name] = true
 
 		/* When an ingresscontroller is being deleted, it takes time as it needs to delete several
 		services (ie the load balancer service has finalizers for the cloud provider resource cleanup)/
@@ -242,6 +275,22 @@ func (r *ReconcilePublishingStrategy) Reconcile(request reconcile.Request) (reco
 					return reconcile.Result{}, err
 				}
 				return reconcile.Result{Requeue: true}, nil
+			}
+		}
+	}
+
+	// Delete all IngressControllers that are owned by cloud-ingress-operator but not in PublishingStrategy
+	for ingress, exists := range ownedIngressExistingMap {
+		if !exists {
+			// Delete requires an object referece, so we must get it first
+			ingressToDelete := &operatorv1.IngressController{}
+			err = r.client.Get(context.TODO(), types.NamespacedName{Name: ingress, Namespace: ingressControllerNamespace}, ingressToDelete)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			err = r.client.Delete(context.TODO(), ingressToDelete)
+			if err != nil {
+				return reconcile.Result{}, err
 			}
 		}
 	}
@@ -429,4 +478,18 @@ func validatePatchableSpec(ingressController operatorv1.IngressController, desir
 	}
 
 	return true, ""
+}
+
+// Given an IngressControllerList, returns only IngressControllers with the Owner annotation
+func getIngressWithOwnerAnnotation(ingressList operatorv1.IngressControllerList) *operatorv1.IngressControllerList {
+
+	ownedIngressList := &operatorv1.IngressControllerList{}
+
+	for _, ingress := range ingressList.Items {
+		if _, ok := ingress.Annotations["Owner"]; ok {
+			ownedIngressList.Items = append(ownedIngressList.Items, ingress)
+		}
+	}
+
+	return ownedIngressList
 }
